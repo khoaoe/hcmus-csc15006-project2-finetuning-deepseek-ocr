@@ -1,0 +1,1 @@
+# [CSC15006 - Project 2] Fine-tuning DeepSeek OCR with Vietnamese dataset
