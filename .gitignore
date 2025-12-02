@@ -1,0 +1,20 @@
+# data
+data/
+*.zip
+*.jpg
+*.png
+*.jsonl
+
+# model
+models/
+*.pt
+*.bin
+*.safetensors
+outputs/
+
+# system/environment files
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.env
+venv/
