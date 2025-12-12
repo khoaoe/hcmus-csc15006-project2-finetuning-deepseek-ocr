@@ -1,0 +1,159 @@
+\section{Giới thiệu}
+\subsection{Đặt vấn đề}
+Nhận dạng chữ viết tay (Handwritten Text Recognition - HTR) là một bài toán thách thức trong lĩnh vực Thị giác máy tính và Xử lý ngôn ngữ tự nhiên. Đặc biệt đối với tiếng Việt, sự phức tạp của hệ thống dấu câu (thanh điệu) và sự đa dạng trong phong cách viết tay khiến các mô hình OCR thông thường gặp nhiều khó khăn.
+
+Các mô hình Đa phương thức lớn (Large Multimodal Models - LMMs) như DeepSeek-OCR đã cho thấy khả năng ấn tượng trên nhiều tác vụ chung. Tuy nhiên, ở chế độ Zero-shot, chúng thường gặp khó khăn với các ngôn ngữ ít tài nguyên hoặc các miền dữ liệu đặc thù như chữ viết tay tiếng Việt.
+
+\subsection{Mô hình DeepSeek-OCR}
+Trong đồ án này, em sử dụng mô hình \textbf{DeepSeek-OCR} (biến thể \texttt{unsloth/DeepSeek-OCR} dựa trên kiến trúc DeepSeek-VL-1.3b). Đây là mô hình kết hợp giữa:
+\begin{itemize}
+    \item \textbf{Vision Encoder:} Sử dụng SigLIP để trích xuất đặc trưng hình ảnh chất lượng cao.
+    \item \textbf{LLM Decoder:} Mô hình ngôn ngữ lớn giúp giải mã các đặc trưng hình ảnh thành chuỗi văn bản, tận dụng khả năng hiểu ngữ nghĩa của LLM.
+\end{itemize}
+Mục tiêu là tinh chỉnh (Fine-tune) mô hình này để thích nghi với bộ dữ liệu chữ viết tay tiếng Việt UIT-HWDB.
+
+\section{Phương pháp thực hiện}
+
+\subsection{Pipeline tổng quan}
+Quy trình thực hiện bao gồm các bước:
+\begin{enumerate}
+    \item \textbf{Input:} Ảnh đầu vào chứa dòng văn bản viết tay.
+    \item \textbf{Preprocessing:} Chuẩn hóa kích thước ảnh.
+    \item \textbf{Training:} Sử dụng kỹ thuật QLoRA để fine-tune mô hình trên GPU giới hạn.
+    \item \textbf{Inference:} Sinh văn bản và hậu xử lý.
+\end{enumerate}
+
+\subsection{Chuẩn bị dữ liệu}
+Sử dụng bộ dữ liệu \textbf{UIT-HWDB} (University of Information Technology - Handwriting Database).
+\begin{itemize}
+    \item \textbf{Tổng số mẫu:} 7,028 ảnh.
+    \item \textbf{Đặc điểm:} Qua phân tích (Notebook 00), tỷ lệ khung hình (Aspect Ratio) trung bình là $\sim$11:1 (chiều ngang lớn hơn chiều cao). Điều này phù hợp với Vision Encoder của DeepSeek-OCR (hỗ trợ độ rộng lên tới 2048px) mà không cần cắt nhỏ ảnh (cropping/patching).
+    \item \textbf{Tiền xử lý:} Ảnh được resize về độ phân giải chuẩn của mô hình nhưng vẫn giữ tỷ lệ khung hình để tránh làm méo chữ.
+\end{itemize}
+
+\subsection{Cấu hình Fine-tuning (Hyperparameters)}
+Để huấn luyện hiệu quả trên phần cứng giới hạn (GPU T4/P100), em áp dụng kỹ thuật \textbf{QLoRA} (Quantized Low-Rank Adaptation). Mô hình gốc được load ở độ chính xác 4-bit, và các adapter LoRA được gắn vào các lớp Attention.
+
+Cấu hình chi tiết (được trích xuất từ Notebook 02):
+\begin{table}[H]
+\centering
+\caption{Các tham số huấn luyện (Training Hyperparameters)}
+\label{tab:hyperparams}
+% Thêm |l|l| để tạo đường kẻ dọc cho 2 cột
+\begin{tabular}{|l|l|}
+\hline
+\textbf{Tham số} & \textbf{Giá trị} \\
+\hline
+Base Model & \texttt{unsloth/DeepSeek-OCR} \\
+\hline
+Kỹ thuật & QLoRA (4-bit quantization) \\
+\hline
+Learning Rate & $2 \times 10^{-4}$ \\
+\hline
+Scheduler & Cosine (với Warmup ratio 0.1) \\
+\hline
+Batch Size & 2 (per device) \\
+\hline
+Gradient Accumulation & 8 bước $\rightarrow$ Effective Batch Size = 16 \\
+\hline
+Số Epochs & 3 \\
+\hline
+Optimizer & \texttt{adamw\_8bit} \\
+\hline
+Max Sequence Length & 1024 \\
+\hline
+\end{tabular}
+\end{table}
+
+\section{Thực nghiệm}
+
+\subsection{Thiết kế}
+Dữ liệu được chia thành 3 tập: Train, Validation và Test. Kết quả báo cáo dưới đây được đánh giá trên tập \textbf{Test set độc lập gồm 201 mẫu}.
+
+So sánh hiệu năng giữa hai phiên bản:
+\begin{enumerate}
+    \item \textbf{Baseline (Zero-shot):} Mô hình gốc chưa qua fine-tune.
+    \item \textbf{Fine-tuned Model:} Mô hình sau khi huấn luyện 3 epochs.
+\end{enumerate}
+
+\subsection{Metrics}
+Độ đo chính được sử dụng là \textbf{CER (Character Error Rate)}.
+\begin{itemize}
+    \item Lý do chọn CER: Với bài toán OCR, đặc biệt là tiếng Việt có dấu, độ chính xác (Accuracy) là quá khắt khe (sai một dấu coi như sai cả câu). CER đo lường khoảng cách chỉnh sửa (Levenshtein distance) giữa văn bản dự đoán và nhãn thực tế, phản ánh chính xác mức độ sai sót từng ký tự.
+\end{itemize}
+
+\section{Kết quả}
+
+\subsection{Phân tích định lượng}
+Kết quả thực nghiệm cho thấy sự cải thiện vượt bậc sau khi Fine-tune:
+
+\begin{table}[H]
+\centering
+\caption{So sánh kết quả CER trên tập Test (Thấp hơn là tốt hơn)}
+\label{tab:results}
+\begin{tabular}{@{}lcc@{}}
+\toprule
+\textbf{Mô hình} & \textbf{Average CER} & \textbf{Mức độ cải thiện} \\ \midrule
+DeepSeek-OCR (Baseline) & 1.0569 & - \\
+\textbf{DeepSeek-OCR (Fine-tuned)} & \textbf{0.1157} & \textbf{$\sim$ 89\%} \\ \bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Nhận xét:} Mức CER $> 1.0$ của Baseline cho thấy mô hình gốc gần như không đọc được chữ viết tay tiếng Việt (thường sinh ra ký tự vô nghĩa hoặc ngôn ngữ khác). Sau khi fine-tune, CER giảm xuống còn $\sim 0.11$, nghĩa là độ chính xác cấp ký tự đạt khoảng 89\%.
+
+\subsection{Quá trình huấn luyện}
+Biểu đồ Loss (Hình \ref{fig:loss}) cho thấy mô hình hội tụ tốt. Training loss giảm mạnh từ 0.58 xuống 0.115, và Validation loss ổn định quanh mức 0.36, không có dấu hiệu Overfitting nghiêm trọng.
+
+\begin{figure}[H]
+    \centering
+    \fbox{\begin{minipage}{0.8\textwidth}
+        \centering
+        % \vspace{1cm}
+        \includegraphics[width=1\textwidth]{img/training_loss_chart.png} 
+        % \vspace{1cm}
+    \end{minipage}}
+    \caption{Biểu đồ Training Loss và Validation Loss qua 500 bước huấn luyện.}
+    \label{fig:loss}
+\end{figure}
+
+\subsection{Phân tích định tính}
+
+\textbf{Trường hợp cải thiện (Success Case):}
+Baseline thường bị "ảo giác" (hallucination) ra các ngôn ngữ không phải tiếng Việt. Ví dụ:
+\begin{itemize}
+    \item \textbf{Ground Truth:} \textit{"các nhà đầu tư trong Khu chế xuất Tân Thuận..."}
+    \item \textbf{Baseline:} \textit{"(tiếng Nga)..."} (Ký tự Cyrillic vô nghĩa)
+    \item \textbf{Fine-tuned:} \textit{"các nhà đầu tư trong Khu chế xuất Tân Thuận..."} (Chính xác 100\%)
+\end{itemize}
+
+\begin{figure}[H]
+    \centering
+    \fbox{\begin{minipage}{0.9\textwidth}
+        \centering
+        \includegraphics[width=1\textwidth]{img/sample.png}
+    \end{minipage}}
+    \caption{So sánh kết quả giữa Baseline và Fine-tuned model.}
+    \label{fig:success}
+\end{figure}
+
+\section{Thảo luận}
+
+\subsection{Đánh giá hiệu quả}
+Việc giảm CER từ 1.05 xuống 0.11 chứng minh rằng kỹ thuật quá trình Fine-tuning là cực kỳ hiệu quả. Mô hình đã chuyển từ trạng thái "bối rối về mặt thị giác" sang trạng thái "hiểu ngữ nghĩa". Việc sử dụng Cosine Scheduler giúp mô hình hội tụ mượt mà hơn.
+
+\subsection{Hạn chế}
+Dựa trên phân tích các trường hợp lỗi (Top Regressions) từ Notebook 04, mô hình vẫn gặp khó khăn ở một số điểm:
+\begin{enumerate}
+    \item \textbf{Nhầm lẫn hình thái chữ:} Các chữ cái có nét viết tay tương tự dễ bị nhầm lẫn. Ví dụ: \textit{"hách dịch"} bị nhận diện nhầm thành \textit{"khách dành"} (nhầm 'h' với 'kh', 'dịch' với 'dành').
+    \item \textbf{Ảo giác ngữ nghĩa:} Đôi khi mô hình tự động điền từ theo thói quen của LLM thay vì nhìn vào ảnh (ví dụ: tự thêm từ "cửa quyền" sau từ "quan liêu" dù trong ảnh không có).
+\end{enumerate}
+
+\section{Kết luận}
+Đồ án đã thực hiện thành công việc tinh chỉnh mô hình DeepSeek-OCR cho bài toán nhận dạng chữ viết tay tiếng Việt. Với kết quả CER 0.11, mô hình cho thấy tiềm năng ứng dụng thực tế cao trong việc số hóa tài liệu. Tuy nhiên, để cải thiện hơn nữa, cần mở rộng tập dữ liệu và áp dụng các kỹ thuật Augmentation để mô hình học được nhiều kiểu chữ viết tay đa dạng hơn.
+
+\section*{Tài liệu tham khảo \& Source Code}
+\begin{itemize}
+    \item Source code đồ án được nộp kèm theo báo cáo này (bao gồm 5 file Notebooks).
+    \item Dataset: UIT-HWDB.
+    \item Base Model: DeepSeek-VL.
+\end{itemize}
